@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# local state
+data/
+.cache/
+
+# footage and output
+input/
+renders/
+
+# editor / OS noise
+.DS_Store
+*.swp

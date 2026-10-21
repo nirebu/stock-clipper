@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock Clipper</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="logo"></span>Stock Clipper</div>
+  <button class="source" id="sourceBtn" title="Change source folder">
+    <span class="dot" id="sourceDot"></span>
+    <span class="path" id="sourcePath">…</span>
+    <span class="edit">change</span>
+  </button>
+  <div class="spacer"></div>
+  <button class="btn ghost" id="btnRescan" title="Rescan the source folder">Rescan</button>
+  <button class="btn ghost" id="btnRenders" title="Open the renders folder">Renders</button>
+  <button class="btn ghost" id="btnSettings" title="Settings">Settings</button>
+</header>
+
+<div class="layout">
+  <aside class="library">
+    <div class="lib-head">
+      <input id="search" class="input" placeholder="Filter clips…" autocomplete="off" spellcheck="false">
+      <span class="count" id="libCount">0</span>
+    </div>
+    <div class="lib-actions">
+      <button class="btn small" id="btnRenderAll">Render all</button>
+      <button class="btn small ghost" id="btnRenderEdited">Render edited</button>
+    </div>
+    <div id="clipList" class="clip-list"></div>
+    <div id="libEmpty" class="library-empty" hidden>
+      <strong>No clips here yet</strong>
+      <span>Drop video files into the source folder, then hit Rescan.</span>
+    </div>
+  </aside>
+
+  <main class="editor">
+    <div class="stage" id="stage">
+      <video id="video" playsinline preload="auto"></video>
+      <div class="stage-empty" id="stageEmpty">
+        <div class="big">Pick a clip</div>
+        <div class="muted">Select something on the left to start trimming.</div>
+      </div>
+      <div class="stage-hud" id="stageHud" hidden>
+        <span id="hudName"></span>
+        <span class="hud-sep">·</span>
+        <span id="hudMeta"></span>
+        <button class="pill" id="hudRendered" hidden>viewing render · back to source</button>
+      </div>
+      <div class="bigplay" id="bigPlay" hidden>▶</div>
+    </div>
+
+    <div class="timeline disabled" id="timeline">
+      <div class="tl-head">
+        <div class="field">
+          <label for="inInput">In</label>
+          <input id="inInput" class="tc-input" value="0:00.00" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="outInput">Out</label>
+          <input id="outInput" class="tc-input" value="0:00.00" spellcheck="false">
+        </div>
+        <div class="field">
+          <label>Length</label>
+          <div class="tc-read" id="lenRead">0:00.00</div>
+        </div>
+        <div class="tl-buttons">
+          <button class="btn tiny ghost" id="btnSetIn" title="Set in point at playhead (I)">Set in</button>
+          <button class="btn tiny ghost" id="btnSetOut" title="Set out point at playhead (O)">Set out</button>
+          <button class="btn tiny ghost" id="btnReset" title="Clear trim, rotation and flips">Reset</button>
+        </div>
+        <div class="spacer"></div>
+        <div class="warn" id="shortWarn" hidden></div>
+      </div>
+
+      <div class="track-wrap">
+        <div class="track" id="track">
+          <div class="filmstrip" id="filmstrip"><div class="strip-loading" id="stripLoading"></div></div>
+          <div class="shade" id="shadeL"></div>
+          <div class="shade" id="shadeR"></div>
+          <div class="sel" id="selRect"></div>
+          <div class="handle" id="handleIn"><i></i></div>
+          <div class="handle" id="handleOut"><i></i></div>
+          <div class="playhead" id="playhead"></div>
+        </div>
+        <div class="ruler" id="ruler"></div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn icon" id="btnPlay" title="Play / pause (Space)">▶</button>
+      <button class="btn icon ghost" id="btnStepBack" title="Back one frame (←)">⟨</button>
+      <button class="btn icon ghost" id="btnStepFwd" title="Forward one frame (→)">⟩</button>
+      <label class="check" title="Loop the trimmed selection while previewing">
+        <input type="checkbox" id="chkLoop" checked> Loop
+      </label>
+
+      <div class="divider"></div>
+
+      <span class="group-label">Rotate</span>
+      <div class="seg" id="rotateSeg">
+        <button data-rotate="0">0°</button>
+        <button data-rotate="90">90°</button>
+        <button data-rotate="180">180°</button>
+        <button data-rotate="270">270°</button>
+      </div>
+      <button class="btn icon ghost" id="btnFlipH" title="Flip horizontally">⇋</button>
+      <button class="btn icon ghost" id="btnFlipV" title="Flip vertically">⇵</button>
+
+      <div class="divider"></div>
+      <label class="check" id="audioWrap" title="Keep the source audio track in the render">
+        <input type="checkbox" id="chkAudio"> Keep audio
+      </label>
+
+      <div class="spacer"></div>
+      <span class="keys" id="keysHint">space play · I / O set in / out · ←→ nudge</span>
+      <button class="btn primary" id="btnRender" title="Render this clip (Ctrl+Enter)">Render clip</button>
+    </div>
+  </main>
+</div>
+
+<section class="queue" id="queue">
+  <button class="queue-head" id="queueToggle">
+    <span class="chev" id="queueChev">▴</span>
+    <span>Render queue</span>
+    <span class="badge" id="queueBadge" hidden>0</span>
+    <span class="queue-summary" id="queueSummary"></span>
+  </button>
+  <div class="queue-body" id="queueBody" hidden></div>
+</section>
+
+<!-- settings -->
+<div class="modal-backdrop" id="settingsModal" hidden>
+  <div class="modal">
+    <header>
+      <h2>Settings</h2>
+      <button class="btn icon ghost" data-close>✕</button>
+    </header>
+    <div class="modal-body">
+      <label class="row">
+        <span>Source folder</span>
+        <div class="inline">
+          <input class="input" id="setRoot" spellcheck="false">
+          <button class="btn small ghost" id="browseRoot">Browse…</button>
+        </div>
+      </label>
+      <label class="row">
+        <span>Output folder</span>
+        <div class="inline">
+          <input class="input" id="setOut" spellcheck="false">
+          <button class="btn small ghost" id="browseOut">Browse…</button>
+        </div>
+      </label>
+      <label class="row">
+        <span>Filename suffix</span>
+        <div class="inline">
+          <input class="input" id="setSuffix" spellcheck="false" placeholder="-edit">
+          <span class="muted small">clip<em>suffix</em>.mp4</span>
+        </div>
+      </label>
+      <div class="row">
+        <span>Quality (CRF <b id="crfVal">18</b>)</span>
+        <input type="range" id="setCrf" min="12" max="30" step="1">
+        <span class="muted small">lower = better &amp; bigger</span>
+      </div>
+      <label class="row">
+        <span>Encoding preset</span>
+        <select class="input" id="setPreset">
+          <option value="veryfast">veryfast — quick</option>
+          <option value="fast">fast</option>
+          <option value="medium">medium — balanced</option>
+          <option value="slow">slow — smaller</option>
+          <option value="slower">slower</option>
+        </select>
+      </label>
+      <label class="row">
+        <span>Warn below (seconds)</span>
+        <div class="inline">
+          <input class="input narrow" id="setMinDur" type="number" min="0" max="120" step="0.5">
+          <span class="muted small">short-clip hint</span>
+        </div>
+      </label>
+      <div class="row">
+        <span>Audio</span>
+        <label class="check"><input type="checkbox" id="setAudio"> Keep audio by default</label>
+        <div class="muted small hint">
+          Silent unless ticked. Kept audio is copied when the source codec fits MP4,
+          otherwise re-encoded to AAC.
+        </div>
+      </div>
+      <p class="muted small">
+        Renders are H.264 MP4 (yuv420p, faststart) at the clip's native resolution and frame rate.
+      </p>
+    </div>
+    <footer>
+      <span class="muted small" id="ffmpegStatus"></span>
+      <div class="spacer"></div>
+      <button class="btn ghost" data-close>Cancel</button>
+      <button class="btn primary" id="saveSettings">Save</button>
+    </footer>
+  </div>
+</div>
+
+<!-- folder browser -->
+<div class="modal-backdrop" id="browseModal" hidden>
+  <div class="modal">
+    <header>
+      <h2>Choose a folder</h2>
+      <button class="btn icon ghost" data-close>✕</button>
+    </header>
+    <div class="modal-body">
+      <div class="browse-path">
+        <button class="btn small ghost" id="browseUp">↑ Up</button>
+        <span class="mono" id="browsePath"></span>
+      </div>
+      <div class="browse-list" id="browseList"></div>
+      <div class="muted small" id="browseHint"></div>
+    </div>
+    <footer>
+      <div class="spacer"></div>
+      <button class="btn ghost" data-close>Cancel</button>
+      <button class="btn primary" id="browseUse">Use this folder</button>
+    </footer>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
