@@ -2,87 +2,102 @@
 
 Local, single-user app for turning camera footage into individual stock-video
 files: import clips → trim in/out → rotate/flip → preview → render MP4 per clip.
-Target output is Pond5, but the app only produces clean H.264 MP4s, nothing site-specific.
+Target output is Pond5, but the app only produces clean H.264 MP4s, nothing
+site-specific.
 
-There are two front ends over the same model: the original **web app** at the repo
-root (Express + `public/`, kept as reference) and the **native Qt 6 / QML app** in
-`desktop/` (no server, single binary). They share the JSON state format and the
-ffmpeg pipeline, so `lib/media.js` and `desktop/src/media.cpp` must stay in sync.
-
-User-facing usage lives in `README.md` (web) and `desktop/README.md` (native). This
-file is the context an agent needs to change the code without breaking the workflow.
+Native **Qt 6 / QML** app: one binary that talks to `ffmpeg`/`ffprobe` and nothing
+else. User-facing usage lives in `README.md`; this file is the context an agent
+needs to change the code without breaking the workflow.
 
 ## Commands
 
 ```sh
-npm install          # express only dependency
-npm start            # http://localhost:4321 (bound to 127.0.0.1)
-npm run dev          # node --watch
-PORT=4400 npm start  # alternate port
-node --check server.js && node --check lib/media.js && node --check public/app.js
+cmake -S . -B build -G Ninja && cmake --build build   # build
+./build/stock-clipper                                 # run
+
+# headless verification (renders one clip, prints the output path)
+cmake --build build --target stock-clipper-selftest
+STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen ./build/stock-clipper-selftest
+
+# layout screenshot
+STOCK_HOME=/tmp/sc-test SC_SHOT=/tmp/shot.png SC_OPEN=settings ./build/stock-clipper
 ```
 
-No build step, no bundler, no framework. `public/` is served as-is. Keep it that way.
-
-Stop a running instance by PID from `ss`, **not** `pkill -f "node server.js"` — the
-pattern matches the shell command running `pkill` too and kills your own shell:
-
-```sh
-kill $(ss -ltnp | grep 4321 | grep -oP 'pid=\K[0-9]+')
-```
+ffmpeg and ffprobe must be on `PATH` (not bundled). Qt 6.5+ with Core, Gui, Quick,
+Multimedia and the **FFmpeg** multimedia backend.
 
 ## Architecture
 
 ```
-server.js          Express 5 app: settings/edits stores, library scan, previews, render queue, routes
-lib/media.js       ffprobe wrapper + the ffmpeg filter/argument builders (single source of truth)
-public/index.html  static shell, IDs are referenced directly from app.js
-public/app.js      all UI state/interaction (~1k lines, no framework, plain DOM)
-public/style.css   dark theme; CSS vars at the top
-input/             source clips (created at boot, gitignored)
-renders/           render output (created at boot, gitignored)
-data/settings.json persisted settings
-data/edits.json    { absolutePath: edit } — trims/rotation survive restarts
-.cache/probe.json  ffprobe results, keyed by absolute path
-.cache/thumb-*.jpg / .cache/strip-*.jpg   generated previews, content-addressed
+CMakeLists.txt      app + selftest targets (qt_add_qml_module URI StockClipper)
+src/core.*          Edit/Meta/Settings/Paths, resolveInside, normalizeEdit, isEdited,
+                    sameCut, fmtTime/parseTime, cacheKey, JSON store
+src/media.*         ffprobe arg builder, parseProbe, buildVideoFilter, audioPlan,
+                    renderArgs — the single source of truth for the ffmpeg pipeline
+src/library.*       Prober, Thumbnailer, ClipModel + ClipFilterModel, listVideos (depth 3)
+src/render.*        RenderQueue (itself the QAbstractListModel of jobs), progress parsing
+src/backend.*       QML facade: state, selection, edits, playback/seek/trim, render
+                    enqueue, settings/browse, priming, trim loop
+src/main.cpp        app wiring, QML message handler, SC_* test hooks
+qml/                Main, Theme (singleton), ClipRow, Stage, Timeline, QueuePanel,
+                    Sheet + dialogs, Btn, TickBox, Toast — plain Items, no
+                    QtQuick.Controls on purpose
+tests/selftest.cpp  headless driver
 ```
 
-### Request flow
+State is per-user, not in the checkout:
 
-1. `GET /api/library` walks the source folder (depth 3), ffprobes every video with at
-   most 4 in flight (`mapLimit`), merges the stored edit, and returns the list.
-   It re-walks on **every** request — cheap because probe results are cached by
-   `(path, mtime, size)`. That is what makes the Rescan button (and dropped files)
-   show up; there is no filesystem watcher.
-2. The browser previews the **original** file through `GET /media` (Range requests
-   handled by `res.sendFile`) and applies rotation with a CSS transform. There is no
-   proxy/preview render.
-3. `PUT /api/edit` persists the cut; debounced 220 ms from the client.
-4. `POST /api/render` enqueues one job per path. The queue is in-memory and strictly
-   serial (x264 already uses all cores). The client polls `GET /api/jobs` every 650 ms
-   while anything is active.
+| what | where |
+| --- | --- |
+| settings, edits | `QStandardPaths` AppData `stock-clipper/` |
+| probe cache, thumbnails, filmstrips | `QStandardPaths` Cache `stock-clipper/` |
+
+`STOCK_HOME` overrides both (`dir/data`, `dir/.cache`). On first run
+`Paths::discover()` copies `./data/settings.json` and `./data/edits.json` from the
+cwd once, so a fresh state dir inherits existing trims and folder settings. The
+files are plain JSON; unknown fields are ignored on load.
+
+### Signal flow
+
+1. `Backend::rescan()` walks the source folder (depth 3, skips dot entries), reuses
+   the probe cache when `(mtime, size)` match, and otherwise queues a `Prober`
+   request (4 concurrent `ffprobe` processes). Clips appear immediately as
+   `loading`, then fill in as probes finish. There is **no filesystem watcher**;
+   Rescan re-walks.
+2. `ClipModel` rows are decorated with the stored edit; edit changes are applied to
+   the model in place and persisted by a 220 ms single-shot `QTimer` (~"debounce").
+3. Selecting a clip sets `QMediaPlayer::setSource` on the original file and
+   **primes** a frame (see gotchas). Previews show the original; rotation and flips
+   are QML transforms. There is no proxy/preview render.
+4. Rendering enqueues jobs into `RenderQueue`, which runs exactly one `ffmpeg`
+   `QProcess` at a time and parses `-progress pipe:1`; the drawer is the queue's
+   model. Jobs are in-memory; edits and rendered files are the durable state.
 
 ### Data model
 
-`edit` = `{ in, out, rotate, flipH, flipV, audio }` in seconds/degrees/booleans,
-plus server-owned bookkeeping `{ outputPath, renderedAt, modifiedAt }`.
+`Edit` = `{ in, out, rotate, flipH, flipV, audio }` in seconds/degrees/booleans,
+plus app-owned bookkeeping `{ outputPath, renderedAt, modifiedAt }`.
 
 - `in`/`out` are **source-clip times**, not times inside the trimmed clip. The whole
   timeline UI is laid out against source duration. Do not "simplify" this.
 - `out` is effectively exclusive; trimmed length is `out - in`; minimum gap 0.05 s.
 - `rotate` ∈ {0, 90, 180, 270} clockwise; flips apply *after* rotation (output space).
-- `audio` is tri-state: `null` = follow `settings.audio` (the default, `false`),
-  `true`/`false` = explicit per-clip choice. Resolving it lives in
-  `keepAudio(edit, settings)` on both sides; never coerce `null` to `false` in
-  `normalizeEdit` or changing the default stops applying to untouched clips.
+- `audio` is tri-state: `null` = follow `settings.audio` (default `false`),
+  `true`/`false` = explicit per-clip choice. Resolving it is
+  `edit.audio.value_or(settings.audio)` (`Backend::keepAudio`); never coerce `null`
+  to `false` in `normalizeEdit`, or changing the default stops applying to untouched
+  clips.
 - `modifiedAt` is bumped only when the cut actually changes (`sameCut`, which includes
   `audio`), so `renderedAt < modifiedAt` means "render is stale" → UI shows
   `re-render`. Audio is deliberately *not* part of `isEdited` (it is not a trim), so
   audio-only changes never light up the `trimmed` badge or `Render edited`.
+- Bookkeeping is never accepted from the UI: `normalizeEdit` drops it and the app
+  re-attaches it from the stored edit. Letting a request win would roll back a
+  finished render's timestamp and make the stale badge lie.
 
 ## Rendering (the part to be careful with)
 
-`buildVideoFilter()` in `lib/media.js` is used by **renders, thumbnails and
+`buildVideoFilter()` in `src/media.cpp` is used by **renders, thumbnails and
 filmstrips** — orientation can never drift between preview and output. Change it once.
 
 Order: rotation → flips → `scale=trunc(iw/2)*2:trunc(ih/2)*2` → `setsar=1`.
@@ -94,26 +109,30 @@ Order: rotation → flips → `scale=trunc(iw/2)*2:trunc(ih/2)*2` → `setsar=1`
 - `-map 0:v:0`, plus `-map 0:a:0` only when audio is kept. Sony/GoPro files carry
   extra timed-metadata streams; only the first video/audio streams are mapped on purpose.
 - `libx264 -preset <s> -crf <n> -pix_fmt yuv420p -profile:v high`
-- audio: `audioPlan()` in `lib/media.js` decides `none` / `copy` / `aac`.
-  `-c:a copy -shortest` for MP4-safe codecs (AAC, MP3, AC3/E-AC3, ALAC — `-shortest`
-  stops the copied track running ~20 ms past the video); AAC 192k/48k otherwise;
-  `-an` when stripped or the source is silent. Silent is the default.
+- audio: `audioPlan()` decides `none` / `copy` / `aac`. `-c:a copy -shortest` for
+  MP4-safe codecs (AAC, MP3, AC3/E-AC3, ALAC — `-shortest` stops the copied track
+  running ~20 ms past the video); AAC 192k/48k otherwise; `-an` when stripped or the
+  source is silent. Silent is the default.
 - `-map_metadata -1`, `-movflags +faststart`
 - `-progress pipe:1 -nostats` for progress
 
-Deliberate non-features: no scaling, no fps conversion, no letterboxing, no color
-management. Output keeps native resolution and frame rate, only rotated. That is what
-stock sites expect, and it keeps the render lossless-ish apart from encoding.
+Deliberate non-features: no scaling, no fps conversion, no letterboxing, no colour
+management. Output keeps native resolution and frame rate, only rotated. That is
+what stock sites expect, and it keeps the render lossless-ish apart from encoding.
+
+`uniqueOutputPath()` reuses a previous output only when that path is in the current
+output folder and belongs to a stored edit; otherwise it appends `-2`, `-3`… so
+unrelated files are never clobbered and a re-render of our own clip can overwrite it.
 
 ## Gotchas found the hard way
 
 **ffmpeg / probe**
 
-- ffmpeg applies a file's display-matrix rotation automatically. `probe()` therefore
-  returns both coded `width/height` and `displayWidth/displayHeight` (swapped for
-  ±90° metadata rotation). The UI sizes the stage from display dims and does *not*
-  re-apply file rotation; manual `rotate` is layered on top. Double-applying is the
-  classic bug here.
+- ffmpeg applies a file's display-matrix rotation automatically. `parseProbe()`
+  therefore returns both coded `width/height` and `displayWidth/displayHeight`
+  (swapped for ±90° metadata rotation). The UI sizes the stage from display dims and
+  does *not* re-apply file rotation; manual `rotate` is layered on top.
+  Double-applying is the classic bug here.
 - ffmpeg 9 ignores `-metadata:s:v rotate=90` when writing; it no longer emits a
   display matrix. To fabricate a "shot vertical, flagged" fixture use the input
   option: `ffmpeg -display_rotation 90 -i in.mp4 -c copy out.mp4`.
@@ -132,58 +151,54 @@ stock sites expect, and it keeps the render lossless-ish apart from encoding.
   Copying also needs `-shortest`: `-t` cuts the video on a frame boundary, and a
   copied AAC packet can otherwise leave the audio ~20 ms longer than the video.
 
-**Express / Node**
+**Qt / QML**
 
-- `res.sendFile` rejects dotfile paths by default (404 "Not Found" even though the
-  file exists). Cache previews live in `.cache/`, so those routes need
-  `{ dotfiles: 'allow' }`. Same flag on `/media` and `/renders` in case a source or
-  output folder has a dot segment in its path.
-- Express 5 + ESM: `require()` does not exist. `express@5.x` is installed.
-- Never trust client-supplied `outputPath`/`renderedAt`/`modifiedAt`.
-  `normalizeEdit()` strips them; endpoints re-attach them from the stored edit. If
-  you let the request body win, a debounced save can roll back a finished render's
-  timestamp and the stale badge lies.
-- Re-rendering overwrites a previous output **only** when that path is in the current
-  output folder and present in `edits`; otherwise `uniqueOutputPath()` appends `-2`,
-  `-3`… so unrelated files are never clobbered.
-- All filesystem paths from the client go through `resolveInside()`; render output
-  must stay inside `settings.outputDir`, media inside `settings.root`.
+- **`VideoOutput` has no `source` in Qt 6.12+.** It exposes a read-only `videoSink`;
+  the app hands that sink to `QMediaPlayer::setVideoSink()` from QML
+  (`App.attachVideoSink(vo.videoSink)`).
+- **A paused `QMediaPlayer` never emits a frame** — not after `setSource`, not after
+  `setPosition`. Selecting a clip or seeking while paused must *prime*: play muted
+  for exactly one frame, then pause (`Backend::primeFrame`). Without it the stage
+  stays black. `m_wantPlay` exists so priming never cancels a real play request.
+- **QML colours are `#AARRGGBB`**, not CSS `#RRGGBBAA`. `"#ffffff14"` is opaque
+  yellow, not 8 % white. All translucency in `qml/` is written `#AARRGGBB`.
+- **`font.pixelSize` is an int**; fractional values fail at load.
+- Stage sizing: the video item is sized by the **unrotated** frame dimensions and the
+  rotation is applied inside a flip wrapper (flips outside, rotation inside, matching
+  `transpose` → `hflip/vflip`). Sizing it by the rotated dimensions makes
+  `VideoOutput.Stretch` distort the frame.
+- The trim loop is a 16 ms `QTimer` started from `playbackStateChanged`, with a
+  ~90 ms `m_seekGuard` after a loop seek, and it stops at `out - 4 ms`.
+- QML warnings are swallowed by the default handler in this environment; `main.cpp`
+  installs one that prints to stderr. Keep it — otherwise load errors are silent.
+- Thumbnails and filmstrips are generated with the clip's orientation and cached by
+  `(path, mtime, size, orientation)`; `Thumbnailer` dedupes in-flight work and
+  `Backend::loadStrip()` tracks `m_stripWant` so a slow response for an older
+  orientation cannot overwrite a newer one. Do not key the cache without orientation.
+- Clean up test renders: the selftest writes into the configured output folder
+  (default `./renders`), not into the state dir.
 
-**Browser / UI**
+**State**
 
-- `[hidden]` does not work against rules that set `display:`. A global
-  `[hidden] { display: none !important; }` is at the top of `style.css`; do not
-  remove it or the empty-state, play overlay and queue drawer all reappear.
-- Flip + rotate order matters. Use `transform: scale(sx, sy) rotate(deg)`
-  (rightmost transform applies first) so flips happen in output space, matching the
-  ffmpeg filter order `transpose` → `hflip/vflip`.
-- The trim loop is enforced with `requestAnimationFrame`, not `timeupdate`
-  (which only fires ~4–10×/s and overshoots the out point). `state.rafActive` guards
-  against stacking rAF loops on repeated `play` events.
-- Filmstrip and thumbnails are generated **with** the clip's orientation, keyed by
-  `(path, mtime, size, orientation)`. If you drop orientation from the cache key,
-  rotating a clip keeps showing sideways frames. `loadFilmstrip()` also uses a
-  monotonically increasing `stripToken` so a slow response for an older orientation
-  cannot overwrite a newer one.
-- Cache-bust with `mtimeMs`, never `Date.now()` — the latter defeats the whole
-  preview cache.
-- Headless Chromium in this environment cannot decode H.264, so screenshots show a
-  black stage. That is not a bug: verify layout from the video element's computed
-  box. A VP9 `.webm` fixture does decode if you need a visible frame.
+- `resolveInside(root, path)` still guards every UI-supplied path (library, output,
+  browse) even without a network; keep it.
+- Edits are keyed by absolute path, so moving footage orphaned its trim.
+- Never write `data/` from code except the one-time import; runtime state belongs in
+  `QStandardPaths` (or `STOCK_HOME`).
 
 ## Verifying a change
 
 Minimum bar for anything touching rendering:
 
 ```sh
-curl -s localhost:4321/api/health
-# render one clip with a trim + rotation, then assert
+STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen ./build/stock-clipper-selftest
+# then ffprobe the printed output path and assert
 ffprobe -v error -print_format json -show_format -show_streams renders/<name>.mp4
-# expect: duration == out-in, rotated dims (e.g. 1080x1920), 50/1 fps, aac, yuv420p,
-#         and 'moov' before 'mdat' (verify with a box walk)
+# expect: duration == out-in, rotated dims (e.g. 1080x1920), 50/1 fps, aac when kept,
+#         yuv420p, High profile, and 'moov' before 'mdat' (walk the boxes)
 ```
 
-Test fixtures without touching real footage (writes are ~MBs, delete afterwards):
+Test fixtures without touching real footage (delete afterwards):
 
 ```sh
 ffmpeg -f lavfi -i "testsrc2=size=1920x1080:rate=30:duration=8" -f lavfi -i "sine=duration=8" \
@@ -198,69 +213,25 @@ re-encode anything in `input/`; use fixtures for experiments and clean them up.
 
 ## Conventions / non-goals
 
-- The UI must stay usable during renders; never block the request that starts a job.
+- The UI must stay usable during renders; never block the event loop that starts
+  a job. Rendering is `QProcess`, never `waitForFinished`.
 - Keep the preview instantaneous. Anything that requires a render to preview is a
-  regression (CSS transform + native video is the whole trick).
+  regression (QMediaPlayer + QML transform is the whole trick).
 - No accounts, no network calls, no telemetry, no upload. Local only.
-- Editing `edit` shape means updating: `normalizeEdit`, `CUT_KEYS`/`sameCut`,
-  `defaultEdit`, the client's `normalizeEdit`, and `isEdited` — plus existing
-  `data/edits.json` entries keep working via normalization.
+- Editing the `edit` shape means updating: `normalizeEdit`, `Edit::sameCut`,
+  `Edit::toJson/fromJson`, `Backend::applyEditTo`, `Backend::decorate` and
+  `isEdited` — plus existing `edits.json` entries keep working via normalization.
 - Jobs are intentionally ephemeral (in-memory). Edits and rendered files are the
   durable state.
 
 ## Known limitations
 
 - Library scan is depth-3 and filesystem-polled, not watched.
-- Edits are keyed by absolute path: moving or renaming footage in `input/` orphans its
-  trim/rotation (the render bookkeeping goes with it).
+- Edits are keyed by absolute path: moving or renaming footage in the source folder
+  orphans its trim/rotation (the render bookkeeping goes with it).
 - One render at a time; no hardware encoder path (no `h264_nvenc`/`vaapi`).
 - Preview audio follows the source and is never muted, even when the render strips it
-  (default). The output track — if kept — is only audible from the queue's `play` link.
+  (default). The output track — if kept — is only audible from the rendered file.
 - Rendered-file playback is served from the flat output folder only.
 - No batch rotation UI beyond the per-row `⟳` button.
-
-## Native app (`desktop/`)
-
-```sh
-cmake -S desktop -B desktop/build -G Ninja && cmake --build desktop/build
-./desktop/build/stock-clipper
-```
-
-Qt 6.5+ (Core, Gui, Quick, Multimedia, FFmpeg backend). No QtQuick.Controls — the
-widgets in `desktop/qml` are plain Items, on purpose.
-
-```
-desktop/src/core.*     Edit/Meta/Settings/Paths, resolveInside, normalizeEdit, isEdited, fmtTime, cacheKey
-desktop/src/media.*    buildVideoFilter, audioPlan, renderArgs, parseProbe (port of lib/media.js — keep in sync)
-desktop/src/library.*  Prober, Thumbnailer, ClipModel + ClipFilterModel (list model), listVideos
-desktop/src/render.*   RenderQueue (itself the QAbstractListModel of jobs)
-desktop/src/backend.*  QML facade: state, selection, edits, playback, render enqueue, settings/browse
-desktop/qml/           Main, Theme (singleton), ClipRow, Stage, Timeline, QueuePanel, Sheet + dialogs, Btn, TickBox, Toast
-desktop/tests/selftest.cpp   headless driver (stock-clipper-selftest target)
-```
-
-State lives in `QStandardPaths` AppData/Cache (`STOCK_HOME` overrides both) and is
-imported once from `./data/*.json` on first run. Same schemas as the web app.
-
-Careful with:
-
-- **`VideoOutput` has no `source` in Qt 6.12+.** It exposes a read-only `videoSink`;
-  the app hands that sink to `QMediaPlayer::setVideoSink()` from QML
-  (`App.attachVideoSink(vo.videoSink)`).
-- **A paused `QMediaPlayer` never emits a frame** — not after `setSource`, not after
-  `setPosition`. Selecting a clip or seeking while paused must *prime*: play muted
-  for exactly one frame, then pause (see `Backend::primeFrame`). Without it the stage
-  stays black. `m_wantPlay` exists so priming never cancels a real play request.
-- **QML colors are `#AARRGGBB`**, not CSS `#RRGGBBAA`. `"#ffffff14"` is opaque yellow,
-  not 8 % white. All translucency in `desktop/qml` is written `#AARRGGBB`.
-- **`font.pixelSize` is an int**; fractional values fail at load.
-- Stage sizing: the video item is sized by the **unrotated** frame dimensions and the
-  rotation is applied inside a flip wrapper (flips outside, rotation inside, matching
-  `transpose` → `hflip/vflip`). Sizing it by the rotated dimensions makes
-  `VideoOutput.Stretch` distort the frame.
-- The trim loop is a 16 ms `QTimer` started from `playbackStateChanged`, with a ~90 ms
-  `m_seekGuard` after a loop seek, and it stops at `out - 4 ms` like the web loop.
-- QML warnings are swallowed by the default handler in this environment; `main.cpp`
-  installs one that prints to stderr. Keep it — otherwise load errors are silent.
-- Verification: `stock-clipper-selftest` + `ffprobe` (rotated dims, fps, yuv420p,
-  `moov` before `mdat`), and `SC_SHOT=… SC_OPEN=settings` for layout screenshots.
+- No scripting surface beyond `selftest`: automation goes through that driver.

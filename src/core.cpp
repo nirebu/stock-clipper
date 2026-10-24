@@ -165,7 +165,7 @@ Paths Paths::discover()
     QDir().mkpath(p.dataDir);
     QDir().mkpath(p.cacheDir);
 
-    // One-time import so trims made with the web version survive the switch.
+    // One-time import so an existing ./data trim set seeds a fresh state dir.
     for (const QString &name : {QStringLiteral("edits.json"), QStringLiteral("settings.json")}) {
         const QString dest = QDir(p.dataDir).filePath(name);
         if (QFileInfo::exists(dest))
@@ -265,7 +265,7 @@ QString sanitizeName(const QString &s)
 
 QString cacheKey(const QString &s)
 {
-    // Same scheme the web version used, so its .cache survives the switch.
+    // Short stable key: 24 hex chars of the seed's SHA-1.
     const QByteArray hash = QCryptographicHash::hash(s.toUtf8(), QCryptographicHash::Sha1).toHex();
     return QString::fromLatin1(hash.left(24));
 }

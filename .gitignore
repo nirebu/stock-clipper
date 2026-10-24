@@ -1,17 +1,13 @@
-# dependencies
-node_modules/
+# build output
+build/
 
-# local state
+# local state / cache (the app keeps these per user unless STOCK_HOME is set)
 data/
 .cache/
 
 # footage and output
 input/
 renders/
-
-# native app build output
-desktop/build/
-desktop/.cache/
 
 # editor / OS noise
 .DS_Store

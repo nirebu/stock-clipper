@@ -1,74 +1,128 @@
 # Stock Clipper
 
-A small local web app for turning camera clips into individual stock-footage files:
-drop clips in a folder, trim each one, rotate/flip when the camera orientation is
-wrong, preview the result, and render them out as H.264 MP4s with the local `ffmpeg`.
+A local, single-user app for turning camera footage into individual stock-video
+files: import clips → trim in/out → rotate/flip → preview → render one MP4 per clip.
+Target output is Pond5-style stock footage, but the app only produces clean H.264
+MP4s — nothing site-specific.
 
-Built for the Pond5 workflow, but it just produces clean MP4s — nothing site-specific.
+Native Qt 6 / QML: a single self-contained binary, local files only.
 
-## Requirements
+ffmpeg is **not** bundled; `ffmpeg` and `ffprobe` must be on `PATH`.
 
-- `ffmpeg` and `ffprobe` on your `PATH` (needs libx264; a normal distro build is fine)
-- Node.js 18+ (tested on 26)
+## Build
 
-## Run
+Needs Qt 6.5+ with Core, Gui, Quick, Multimedia and the **FFmpeg** multimedia
+backend (`qt6-multimedia-ffmpeg`). On Arch:
 
 ```sh
-npm install
-npm start
+sudo pacman -S qt6-base qt6-declarative qt6-multimedia-ffmpeg
 ```
 
-Then open <http://localhost:4321>.
+Then:
 
-Put your clips in `input/` (or point the source folder anywhere via **Settings**),
-and renders land in `renders/` by default.
+```sh
+cmake -S . -B build -G Ninja
+cmake --build build
+./build/stock-clipper
+```
+
+## Where things live
+
+State is per-user, not in the checkout:
+
+| what | where |
+| --- | --- |
+| settings, trims | `~/.local/share/stock-clipper/` (`settings.json`, `edits.json`) |
+| probe cache, thumbnails, filmstrips | `~/.cache/stock-clipper/` |
+
+On first launch the app imports `./data/settings.json` and `./data/edits.json` from
+the directory it was started in, so existing trims and the input/output folders
+carry over on a fresh install.
+
+Set `STOCK_HOME=/some/dir` to use a throwaway state directory (`dir/data`,
+`dir/.cache`) — handy for testing.
+
+Source clips live in the settings' source folder (default `./input`, depth 3),
+renders go to the output folder (default `./renders`). Both are editable in
+Settings, which also has a folder browser.
+
+## Keys
+
+| key | action |
+| --- | --- |
+| `Space` | play / pause the trimmed range |
+| `I` / `O` | set in / out at the playhead |
+| `←` / `→` | step one frame (with `Shift`: one second) |
+| `[` / `]` | nudge in / out by 0.1 s (with `Shift`: 1 s) |
+| `Ctrl+Enter` | render the current clip |
+| `Esc` | close a dialog |
+
+Trim handles can be dragged on the filmstrip; clicking the strip seeks. `Loop`
+(default on) replays the selection while previewing.
 
 ## Workflow
 
-1. **Drop clips** into the source folder. Hit **Rescan** if the app was already open.
-2. **Pick a clip** in the left list. The timeline shows a filmstrip of the whole clip.
-3. **Trim**: drag the amber handles, type exact in/out times, or hit **Set in** /
-   **Set out** at the playhead. Playback loops the selection so you can check the result.
-4. **Rotate**: 0°/90°/180°/270° buttons (plus horizontal/vertical flip). Preview,
-   filmstrip and thumbnail all follow the rotation, so vertical footage shot sideways
-   is shown upright. The quick `⟳` button in the list rotates a clip 90° at a time.
-5. **Audio** is stripped by default (stock footage rarely needs it). Tick **Keep audio**
-   in the editor for one clip, or set it as the default in **Settings → Audio**.
-6. **Render clip**, or **Render all** / **Render edited** for batches. Renders run
-   one at a time in the queue at the bottom; you can keep editing while they run.
-7. Rendered files get a **rendered** badge. If you change the trim afterwards the
-   badge turns into **re-render** so you don't upload a stale file.
+1. Clips in the source folder appear in the list (Rescan re-walks it; there is no
+   filesystem watcher).
+2. Select a clip, drag the in/out handles or type exact times, rotate/flip as
+   needed. Edits are saved automatically (~220 ms after the cut changes) and survive
+   restarts.
+3. Tick `Keep audio` if the clip should keep its sound. Silent is the default.
+4. `Render` writes one MP4. `Render edited` does every trimmed clip, `Render all`
+   does the whole library; jobs run one at a time in the bottom drawer and can be
+   cancelled or retried.
 
-## Keyboard
+A rendered clip whose cut changes again shows `re-render` — the file on disk is
+stale until it is rendered again.
 
-| Key | Action |
+## Rendering
+
+Only rotation and flips are applied: output keeps the clip's native resolution and
+frame rate, H.264 High / `yuv420p` with `+faststart`. No scaling, no fps
+conversion, no letterboxing, no colour management.
+
+Audio is stripped unless "Keep audio" is ticked; a source codec that MP4 players
+accept is stream-copied, anything else (e.g. Sony's `pcm_s16be`) is re-encoded to
+AAC 192k.
+
+## Development
+
+```sh
+cmake --build build
+```
+
+A headless driver for verification is built alongside the app:
+
+```sh
+cmake --build build --target stock-clipper-selftest
+STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen ./build/stock-clipper-selftest
+```
+
+It scans the library, applies `in=0.5 out=2.0 rotate=90` to a clip, renders it and
+prints the output path — then `ffprobe` the result to check duration, rotated
+dimensions, fps, pixel format and `moov`-before-`mdat`.
+
+The app itself takes a few development env vars:
+
+| variable | effect |
 | --- | --- |
-| `Space` | play / pause |
-| `I` / `O` | set in / out point at playhead |
-| `←` / `→` | nudge one frame (`Shift` = one second) |
-| `[` / `]` | nudge in / out point (`Shift` = one second) |
-| `R` | rotate 90° |
-| `Ctrl+Enter` | render current clip |
-| `Esc` | close dialogs |
+| `SC_DEBUG=1` | frame/loop/player-state tracing on stderr |
+| `SC_SHOT=/tmp/out.png` | select a clip, seek, grab the window, exit |
+| `SC_SHOT_DELAY=ms` | delay before the grab (default 5000) |
+| `SC_CLIP=C0016` | clip name filter for `SC_SHOT` |
+| `SC_OPEN=settings\|browse` | open a dialog before grabbing |
+| `SC_RENDER=1` | render the selected clip before grabbing |
+| `SC_AUTOPLAY=1` | start playback before grabbing |
 
-## What the render does
+QML warnings are swallowed by Qt's default handler; `src/main.cpp` installs one
+that prints to stderr. Keep it — otherwise load errors are silent.
 
-- H.264 (`libx264`), `yuv420p`, `+faststart`, metadata stripped
-- Native resolution and frame rate preserved; rotation applied to the pixels
-- CRF 18 / `medium` preset by default (adjustable in Settings)
-- Audio: **off by default**. When kept, the source track is stream-copied (AAC, MP3,
-  AC3/E-AC3, ALAC); codecs MP4 players reject (PCM from Sony XAVC, Opus, FLAC) are
-  re-encoded to AAC 192 kbps so the file still plays.
-- Trim is frame-accurate: input-side seek while re-encoding, then the exact duration
-- Output filename: `<original name><suffix>.mp4` (suffix defaults to `-edit`)
+## Known limitations
 
-Re-rendering a clip overwrites its previous output; other existing files are never
-clobbered (a `-2` suffix is added instead).
-
-## Notes
-
-- Settings, per-clip trim/rotation state and the probe cache live in `data/` and
-  `.cache/`; deleting those is safe (you lose the saved edits, not the footage).
-- The short-clip warning threshold in Settings is only a hint — set it to whatever
-  your marketplace requires.
-- Everything runs locally; the server binds to `127.0.0.1` only.
+- Library scan is depth-3 and polled, not watched: use Rescan after adding files.
+- Edits are keyed by absolute path: moving or renaming footage orphans its
+  trim/rotation (and its render bookkeeping).
+- One render at a time; no hardware encoder path (no `h264_nvenc`/`vaapi`).
+- Preview audio follows the source and is never muted, even when the render strips
+  it (the default). A kept audio track is only audible from the rendered file.
+- No accounts, no telemetry, no upload.

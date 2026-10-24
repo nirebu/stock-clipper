@@ -171,9 +171,8 @@ void Backend::loadState()
     if (ok)
         m_settings.applyPatch(s);
 
-    // First run from the checkout: use its input/ and renders/ folders, which is
-    // what the web app used too. Otherwise fall back to a neutral pair of folders
-    // in $HOME.
+    // First run from the checkout: use its input/ and renders/ folders. Otherwise
+    // fall back to a neutral pair of folders in $HOME.
     if (m_settings.root.trimmed().isEmpty() || m_settings.outputDir.trimmed().isEmpty()) {
         const QString cwdInput = QDir::current().filePath(QStringLiteral("input"));
         if (!haveSettings && QFileInfo(cwdInput).isDir()) {
