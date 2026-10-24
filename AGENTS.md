@@ -215,6 +215,20 @@ ffmpeg -display_rotation 90 -i short.mp4 -c copy flagged.mp4   # metadata rotati
 rotation flags — vertical shots are physically sideways pixels). Do not delete or
 re-encode anything in `input/`; use fixtures for experiments and clean them up.
 
+To look at the **real** window (not an offscreen grab) on this Hyprland machine,
+there is a local skill with a session script:
+
+```sh
+.agents/skills/stock-clipper-ui/scripts/session.sh open   # clean workspace, full-size window
+.agents/skills/stock-clipper-ui/scripts/session.sh shot   # prints PNG path
+.agents/skills/stock-clipper-ui/scripts/session.sh key -k space
+.agents/skills/stock-clipper-ui/scripts/session.sh close  # restores the previous workspace
+```
+
+It uses a scratch `STOCK_HOME`, so UI changes do not touch the user's settings.
+Load the `stock-clipper-ui` skill for the full workflow and limitations (no
+pointer tool is installed, so clicks are not injectable).
+
 ## Conventions / non-goals
 
 - The UI must stay usable during renders; never block the event loop that starts

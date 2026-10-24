@@ -52,6 +52,32 @@ int main(int argc, char *argv[])
     if (engine.rootObjects().isEmpty())
         return 1;
 
+    // SC_CLIP=C0017 preselects the first clip whose path contains that string,
+    // so docs screenshots do not need a pointer. Retries because scanning is
+    // asynchronous and clips only become selectable once they are listed.
+    const QString wantedClip = qEnvironmentVariable("SC_CLIP");
+    if (!wantedClip.isEmpty()) {
+        auto *pick = new QTimer(&app);
+        pick->setInterval(250);
+        QObject::connect(pick, &QTimer::timeout, &app, [&backend, wantedClip, pick] {
+            if (backend.hasSelection()) {
+                pick->stop();
+                return;
+            }
+            for (int i = 0; i < backend.clipCount(); ++i) {
+                const QString path =
+                    backend.clips()->data(backend.clips()->index(i, 0), sc::ClipModel::PathRole)
+                        .toString();
+                if (path.contains(wantedClip)) {
+                    backend.selectClip(path);
+                    pick->stop();
+                    return;
+                }
+            }
+        });
+        pick->start();
+    }
+
     // SC_OPEN=settings opens the settings sheet for screenshots.
     const QString open = qEnvironmentVariable("SC_OPEN");
     if (!open.isEmpty()) {
@@ -68,14 +94,16 @@ int main(int argc, char *argv[])
     const QString shot = qEnvironmentVariable("SC_SHOT");
     if (!shot.isEmpty()) {
         QTimer::singleShot(2200, [&] {
-            const QString wanted = qEnvironmentVariable("SC_CLIP");
-            for (int i = 0; i < backend.clipCount(); ++i) {
-                const QString path =
-                    backend.clips()->data(backend.clips()->index(i, 0), sc::ClipModel::PathRole)
-                        .toString();
-                if (wanted.isEmpty() || path.contains(wanted)) {
-                    backend.selectClip(path);
-                    break;
+            if (!backend.hasSelection()) {
+                const QString wanted = qEnvironmentVariable("SC_CLIP");
+                for (int i = 0; i < backend.clipCount(); ++i) {
+                    const QString path =
+                        backend.clips()->data(backend.clips()->index(i, 0), sc::ClipModel::PathRole)
+                            .toString();
+                    if (wanted.isEmpty() || path.contains(wanted)) {
+                        backend.selectClip(path);
+                        break;
+                    }
                 }
             }
             backend.seekTo(1.0);
