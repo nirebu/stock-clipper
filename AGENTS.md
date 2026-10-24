@@ -1,11 +1,16 @@
 # AGENTS.md — Stock Clipper
 
-Local, single-user web app for turning camera footage into individual stock-video
+Local, single-user app for turning camera footage into individual stock-video
 files: import clips → trim in/out → rotate/flip → preview → render MP4 per clip.
 Target output is Pond5, but the app only produces clean H.264 MP4s, nothing site-specific.
 
-User-facing usage lives in `README.md`. This file is the context an agent needs to
-change the code without breaking the workflow.
+There are two front ends over the same model: the original **web app** at the repo
+root (Express + `public/`, kept as reference) and the **native Qt 6 / QML app** in
+`desktop/` (no server, single binary). They share the JSON state format and the
+ffmpeg pipeline, so `lib/media.js` and `desktop/src/media.cpp` must stay in sync.
+
+User-facing usage lives in `README.md` (web) and `desktop/README.md` (native). This
+file is the context an agent needs to change the code without breaking the workflow.
 
 ## Commands
 
@@ -213,3 +218,49 @@ re-encode anything in `input/`; use fixtures for experiments and clean them up.
   (default). The output track — if kept — is only audible from the queue's `play` link.
 - Rendered-file playback is served from the flat output folder only.
 - No batch rotation UI beyond the per-row `⟳` button.
+
+## Native app (`desktop/`)
+
+```sh
+cmake -S desktop -B desktop/build -G Ninja && cmake --build desktop/build
+./desktop/build/stock-clipper
+```
+
+Qt 6.5+ (Core, Gui, Quick, Multimedia, FFmpeg backend). No QtQuick.Controls — the
+widgets in `desktop/qml` are plain Items, on purpose.
+
+```
+desktop/src/core.*     Edit/Meta/Settings/Paths, resolveInside, normalizeEdit, isEdited, fmtTime, cacheKey
+desktop/src/media.*    buildVideoFilter, audioPlan, renderArgs, parseProbe (port of lib/media.js — keep in sync)
+desktop/src/library.*  Prober, Thumbnailer, ClipModel + ClipFilterModel (list model), listVideos
+desktop/src/render.*   RenderQueue (itself the QAbstractListModel of jobs)
+desktop/src/backend.*  QML facade: state, selection, edits, playback, render enqueue, settings/browse
+desktop/qml/           Main, Theme (singleton), ClipRow, Stage, Timeline, QueuePanel, Sheet + dialogs, Btn, TickBox, Toast
+desktop/tests/selftest.cpp   headless driver (stock-clipper-selftest target)
+```
+
+State lives in `QStandardPaths` AppData/Cache (`STOCK_HOME` overrides both) and is
+imported once from `./data/*.json` on first run. Same schemas as the web app.
+
+Careful with:
+
+- **`VideoOutput` has no `source` in Qt 6.12+.** It exposes a read-only `videoSink`;
+  the app hands that sink to `QMediaPlayer::setVideoSink()` from QML
+  (`App.attachVideoSink(vo.videoSink)`).
+- **A paused `QMediaPlayer` never emits a frame** — not after `setSource`, not after
+  `setPosition`. Selecting a clip or seeking while paused must *prime*: play muted
+  for exactly one frame, then pause (see `Backend::primeFrame`). Without it the stage
+  stays black. `m_wantPlay` exists so priming never cancels a real play request.
+- **QML colors are `#AARRGGBB`**, not CSS `#RRGGBBAA`. `"#ffffff14"` is opaque yellow,
+  not 8 % white. All translucency in `desktop/qml` is written `#AARRGGBB`.
+- **`font.pixelSize` is an int**; fractional values fail at load.
+- Stage sizing: the video item is sized by the **unrotated** frame dimensions and the
+  rotation is applied inside a flip wrapper (flips outside, rotation inside, matching
+  `transpose` → `hflip/vflip`). Sizing it by the rotated dimensions makes
+  `VideoOutput.Stretch` distort the frame.
+- The trim loop is a 16 ms `QTimer` started from `playbackStateChanged`, with a ~90 ms
+  `m_seekGuard` after a loop seek, and it stops at `out - 4 ms` like the web loop.
+- QML warnings are swallowed by the default handler in this environment; `main.cpp`
+  installs one that prints to stderr. Keep it — otherwise load errors are silent.
+- Verification: `stock-clipper-selftest` + `ffprobe` (rotated dims, fps, yuv420p,
+  `moov` before `mdat`), and `SC_SHOT=… SC_OPEN=settings` for layout screenshots.

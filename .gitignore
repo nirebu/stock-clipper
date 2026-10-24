@@ -9,6 +9,10 @@ data/
 input/
 renders/
 
+# native app build output
+desktop/build/
+desktop/.cache/
+
 # editor / OS noise
 .DS_Store
 *.swp
