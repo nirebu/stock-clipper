@@ -18,9 +18,11 @@ cmake -S . -B build -G Ninja && cmake --build build   # build
 # headless verification (renders one clip, prints the output path)
 cmake --build build --target stock-clipper-selftest
 STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen ./build/stock-clipper-selftest
+STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen SC_FORMAT=prores ./build/stock-clipper-selftest
 
 # layout screenshot
 STOCK_HOME=/tmp/sc-test SC_SHOT=/tmp/shot.png SC_OPEN=settings ./build/stock-clipper
+# SC_CLIP=C0017 preselects a clip on startup (substring match), with or without SC_SHOT
 ```
 
 ffmpeg and ffprobe must be on `PATH` (not bundled). Qt 6.5+ with Core, Gui, Quick,
@@ -108,11 +110,16 @@ Order: rotation → flips → `scale=trunc(iw/2)*2:trunc(ih/2)*2` → `setsar=1`
   `-t <out-in>` after `-i`
 - `-map 0:v:0`, plus `-map 0:a:0` only when audio is kept. Sony/GoPro files carry
   extra timed-metadata streams; only the first video/audio streams are mapped on purpose.
-- `libx264 -preset <s> -crf <n> -pix_fmt yuv420p -profile:v high`
-- audio: `audioPlan()` decides `none` / `copy` / `aac`. `-c:a copy -shortest` for
-  MP4-safe codecs (AAC, MP3, AC3/E-AC3, ALAC — `-shortest` stops the copied track
-  running ~20 ms past the video); AAC 192k/48k otherwise; `-an` when stripped or the
-  source is silent. Silent is the default.
+- H.264 (default): `libx264 -preset <s> -crf <n> -pix_fmt yuv420p -profile:v high` in
+  MP4. ProRes: `prores_ks -profile:v 3 -vendor apl0 -pix_fmt yuv422p10le` in MOV.
+  DNxHR: `dnxhd -profile:v dnxhr_hqx -pix_fmt yuv422p10le` in MOV. CRF and preset
+  only apply to H.264; the mezzanine formats use fixed profiles.
+- `outputExtension()` is the only place that maps format → container: `h264` → `mp4`,
+  `prores`/`dnxhr` → `mov`. Never allow ProRes in MP4.
+- audio: `audioPlan()` decides `none` / `copy` / `aac` and takes the container into
+  account. `-c:a copy -shortest` for AAC/MP3/AC3/E-AC3/ALAC, and for PCM when the
+  output is MOV; AAC 192k/48k otherwise; `-an` when stripped or the source is silent.
+  Silent is the default.
 - `-map_metadata -1`, `-movflags +faststart`
 - `-progress pipe:1 -nostats` for progress
 
@@ -123,6 +130,9 @@ what stock sites expect, and it keeps the render lossless-ish apart from encodin
 `uniqueOutputPath()` reuses a previous output only when that path is in the current
 output folder and belongs to a stored edit; otherwise it appends `-2`, `-3`… so
 unrelated files are never clobbered and a re-render of our own clip can overwrite it.
+It also suffixes with the **current format's** extension. `enqueueRender()` must keep
+that guard when it reuses `edit.outputPath`: a format switch has to produce a new path,
+not write ProRes into the old `.mp4`.
 
 ## Gotchas found the hard way
 
@@ -140,14 +150,24 @@ unrelated files are never clobbered and a re-render of our own clip can overwrit
   despite the name. Divide by 1e6.
 - `yuv420p` + H.264 requires even dimensions. Odd source sizes (and some rotations)
   produce odd dims, hence the `trunc(...)` scale. Removing it reintroduces encoder
-  failures on odd-sized footage.
+  failures on odd-sized footage. ProRes and DNxHR are 4:2:2 and need even dims too,
+  so the same filter is correct for every format.
 - Do not set `-level`. It was `4.2` initially and is wrong for 4K input; x264 picks
   a valid level itself.
 - `tile=10x1` emits nothing until it has 10 frames. The filmstrip generator derives
   `fps = 10 / duration` (capped at 30) precisely so a full tile always arrives.
+- ProRes is not muxable into MP4. `-y` truncates an existing output before the muxer
+  rejects it, and the failure handler removes the path afterwards, so writing a
+  format switch into the previous `.mp4` destroys the last good render. The extension
+  guard in `enqueueRender()` is load-bearing.
+- MXF is deliberately not offered: ffmpeg's muxer only accepts 48 kHz audio, which
+  would drag PCM resampling and container-specific audio rules into `audioPlan()`.
+- ProRes (`prores_ks -profile:v 3`) and DNxHR (`dnxhd -profile:v dnxhr_hqx`) are
+  10-bit 4:2:2 and ignore `-crf`/`-preset`. Classic DNxHD has a fixed raster/bitrate
+  table, so use the DNxHR profiles instead of hand-picked DNxHD bitrates.
 - PCM audio in Sony XAVC MP4s (`pcm_s16be`) must not be stream-copied into MP4 —
   ffmpeg will mux it, but players and stock sites reject the result. `audioPlan()`
-  only copies codecs MP4 players accept and falls back to AAC for everything else.
+  only copies codecs the container accepts (PCM is fine in MOV) and falls back to AAC.
   Copying also needs `-shortest`: `-t` cuts the video on a frame boundary, and a
   copied AAC packet can otherwise leave the audio ~20 ms longer than the video.
 
@@ -200,6 +220,11 @@ STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen ./build/stock-clipper-selftest
 ffprobe -v error -print_format json -show_format -show_streams renders/<name>.mp4
 # expect: duration == out-in, rotated dims (e.g. 1080x1920), 50/1 fps, aac when kept,
 #         yuv420p, High profile, and 'moov' before 'mdat' (walk the boxes)
+
+# mezzanine formats: .mov, 10-bit 4:2:2, native fps, pcm/aac audio when kept
+SC_FORMAT=prores STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen ./build/stock-clipper-selftest
+SC_FORMAT=dnxhr  STOCK_HOME=/tmp/sc-test QT_QPA_PLATFORM=offscreen ./build/stock-clipper-selftest
+# expect: prores / dnxhd, yuv422p10le, profile HQ / DNXHR HQX, and no -crf effects
 ```
 
 Test fixtures without touching real footage (delete afterwards):
@@ -248,6 +273,8 @@ pointer tool is installed, so clicks are not injectable).
 - Edits are keyed by absolute path: moving or renaming footage in the source folder
   orphans its trim/rotation (the render bookkeeping goes with it).
 - One render at a time; no hardware encoder path (no `h264_nvenc`/`vaapi`).
+- Output format is global (one format for the queue), with fixed ProRes 422 HQ /
+  DNxHR HQX profiles. No per-clip format, MXF, custom bitrates or profile pickers.
 - Preview audio follows the source and is never muted, even when the render strips it
   (default). The output track — if kept — is only audible from the rendered file.
 - Rendered-file playback is served from the flat output folder only.

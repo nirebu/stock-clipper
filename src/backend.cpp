@@ -867,12 +867,13 @@ QString Backend::uniqueOutputPath(const QString &baseName) const
 {
     const QString clean = sanitizeName(baseName);
     const QString suffix = m_settings.suffix.isEmpty() ? QStringLiteral("-edit") : m_settings.suffix;
+    const QString ext = outputExtension(m_settings.format);
     const QDir dir(m_settings.outputDir);
 
     for (int n = 1; n <= 1000; ++n) {
         const QString candidate = dir.filePath(clean + suffix
                                                + (n == 1 ? QString() : QStringLiteral("-%1").arg(n))
-                                               + QStringLiteral(".mp4"));
+                                               + QStringLiteral(".") + ext);
         if (m_queue->reserves(candidate))
             continue;
         bool ours = false;
@@ -888,7 +889,7 @@ QString Backend::uniqueOutputPath(const QString &baseName) const
             return candidate;
     }
     return dir.filePath(clean + suffix + QStringLiteral("-")
-                        + QString::number(qint64(nowMs())) + QStringLiteral(".mp4"));
+                        + QString::number(qint64(nowMs())) + QStringLiteral(".") + ext);
 }
 
 void Backend::enqueueRender(const QStringList &paths)
@@ -909,7 +910,11 @@ void Backend::enqueueRender(const QStringList &paths)
             continue;
 
         QString outPath;
+        const QString ext = outputExtension(m_settings.format);
+        // Reuse our own output only when it has the current container's
+        // extension; otherwise a format switch would write ProRes into a .mp4.
         if (c->edit.outputPath
+            && QFileInfo(*c->edit.outputPath).suffix().compare(ext, Qt::CaseInsensitive) == 0
             && QDir::cleanPath(QFileInfo(*c->edit.outputPath).absolutePath())
                 == QDir::cleanPath(m_settings.outputDir)) {
             outPath = *c->edit.outputPath;
@@ -928,6 +933,7 @@ void Backend::enqueueRender(const QStringList &paths)
         job.audioCodec = c->meta.audioCodec;
         job.keepAudio = c->edit.audio.value_or(m_settings.audio);
         job.duration = qMax(0.05, c->edit.out - c->edit.in);
+        job.format = m_settings.format;
         job.crf = m_settings.crf;
         job.preset = m_settings.preset;
         job.createdAt = qint64(nowMs());

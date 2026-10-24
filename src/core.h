@@ -63,6 +63,7 @@ struct Settings {
     QString root;
     QString outputDir;
     QString suffix = QStringLiteral("-edit");
+    QString format = QStringLiteral("h264");
     int crf = 18;
     QString preset = QStringLiteral("medium");
     double minDuration = 5.0;
@@ -71,6 +72,9 @@ struct Settings {
     QJsonObject toJson() const;
     void applyPatch(const QJsonObject &patch);
 };
+
+/// "h264", "prores" or "dnxhr".
+bool isOutputFormat(const QString &format);
 
 /* ------------------------------------------------------------------ */
 /* paths + json store                                                  */

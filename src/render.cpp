@@ -207,6 +207,7 @@ void RenderQueue::pump()
     spec.hasAudio = j->hasAudio;
     spec.audioCodec = j->audioCodec;
     spec.keepAudio = j->keepAudio;
+    spec.format = j->format;
     spec.crf = j->crf;
     spec.preset = j->preset;
 

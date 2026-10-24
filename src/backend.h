@@ -30,6 +30,7 @@ class Backend : public QObject
     Q_PROPERTY(QString root READ root NOTIFY settingsChanged)
     Q_PROPERTY(QString outputDir READ outputDir NOTIFY settingsChanged)
     Q_PROPERTY(QString suffix READ suffix NOTIFY settingsChanged)
+    Q_PROPERTY(QString format READ format NOTIFY settingsChanged)
     Q_PROPERTY(int crf READ crf NOTIFY settingsChanged)
     Q_PROPERTY(QString preset READ preset NOTIFY settingsChanged)
     Q_PROPERTY(double minDuration READ minDuration NOTIFY settingsChanged)
@@ -94,6 +95,7 @@ public:
     QString root() const { return m_settings.root; }
     QString outputDir() const { return m_settings.outputDir; }
     QString suffix() const { return m_settings.suffix; }
+    QString format() const { return m_settings.format; }
     int crf() const { return m_settings.crf; }
     QString preset() const { return m_settings.preset; }
     double minDuration() const { return m_settings.minDuration; }

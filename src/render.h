@@ -19,6 +19,7 @@ struct Job {
     bool hasAudio = false;
     QString audioCodec;
     bool keepAudio = false;
+    QString format = QStringLiteral("h264");
     int crf = 18;
     QString preset = QStringLiteral("medium");
     double duration = 0.0;

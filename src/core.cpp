@@ -113,6 +113,7 @@ QJsonObject Settings::toJson() const
         {"root", root},
         {"outputDir", outputDir},
         {"suffix", suffix},
+        {"format", format},
         {"crf", crf},
         {"preset", preset},
         {"minDuration", minDuration},
@@ -132,6 +133,8 @@ void Settings::applyPatch(const QJsonObject &p)
         outputDir = QDir::cleanPath(QFileInfo(str("outputDir").trimmed()).absoluteFilePath());
     if (p.value("suffix").isString())
         suffix = sanitizeSuffix(p.value("suffix").toString());
+    if (p.value("format").isString() && isOutputFormat(p.value("format").toString()))
+        format = p.value("format").toString();
     if (p.value("crf").isDouble())
         crf = qBound(0, int(p.value("crf").toDouble()), 51);
     if (p.value("preset").isString()) {
@@ -145,6 +148,12 @@ void Settings::applyPatch(const QJsonObject &p)
         minDuration = qBound(0.0, p.value("minDuration").toDouble(), 120.0);
     if (p.value("audio").isBool())
         audio = p.value("audio").toBool();
+}
+
+bool isOutputFormat(const QString &format)
+{
+    return format == QLatin1String("h264") || format == QLatin1String("prores")
+        || format == QLatin1String("dnxhr");
 }
 
 /* ------------------------------------------------------------------ */

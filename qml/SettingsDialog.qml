@@ -10,6 +10,7 @@ Sheet {
     property string rootText: ""
     property string outText: ""
     property string suffixText: ""
+    property string formatValue: "h264"
     property int crfValue: 18
     property string presetValue: "medium"
     property string minDurText: "5"
@@ -21,6 +22,7 @@ Sheet {
         rootText = App.root
         outText = App.outputDir
         suffixText = App.suffix
+        formatValue = App.format
         crfValue = App.crf
         presetValue = App.preset
         minDurText = String(App.minDuration)
@@ -32,6 +34,7 @@ Sheet {
             "root": rootText,
             "outputDir": outText,
             "suffix": suffixText,
+            "format": formatValue,
             "crf": crfValue,
             "preset": presetValue,
             "minDuration": Number(minDurText) || 0,
@@ -121,6 +124,45 @@ Sheet {
         spacing: 10
         Text {
             width: 150
+            text: "Format"
+            color: Theme.muted
+            font.pixelSize: 12
+        }
+        Row {
+            spacing: 6
+            Repeater {
+                model: [
+                    { id: "h264", label: "H.264" },
+                    { id: "prores", label: "ProRes 422 HQ" },
+                    { id: "dnxhr", label: "DNxHR HQX" }
+                ]
+                delegate: Btn {
+                    required property var modelData
+                    label: modelData.label
+                    tiny: true
+                    on: dlg.formatValue === modelData.id
+                    onClicked: dlg.formatValue = modelData.id
+                }
+            }
+        }
+    }
+
+    Text {
+        visible: dlg.formatValue !== "h264"
+        width: parent.width
+        wrapMode: Text.WordWrap
+        text: dlg.formatValue === "prores"
+              ? "ProRes 422 HQ · 10-bit 4:2:2 · .mov — much larger files, no quality knob."
+              : "DNxHR HQX · 10-bit 4:2:2 · .mov — much larger files, no quality knob."
+        color: Theme.muted
+        font.pixelSize: 11
+    }
+
+    Row {
+        width: parent.width
+        spacing: 10
+        Text {
+            width: 150
             text: "Filename suffix"
             color: Theme.muted
             font.pixelSize: 12
@@ -149,7 +191,7 @@ Sheet {
         }
         Text {
             anchors.verticalCenter: parent.verticalCenter
-            text: "clip" + dlg.suffixText + ".mp4"
+            text: "clip" + dlg.suffixText + (dlg.formatValue === "h264" ? ".mp4" : ".mov")
             color: Theme.muted
             font.pixelSize: 11
             font.family: Theme.monoFont
@@ -159,6 +201,7 @@ Sheet {
     Row {
         width: parent.width
         spacing: 10
+        visible: dlg.formatValue === "h264"
         Text {
             width: 150
             text: "Quality (CRF " + dlg.crfValue + ")"
@@ -215,6 +258,7 @@ Sheet {
     Row {
         width: parent.width
         spacing: 10
+        visible: dlg.formatValue === "h264"
         Text {
             width: 150
             text: "Encoding preset"
@@ -295,9 +339,9 @@ Sheet {
     Text {
         width: parent.width
         wrapMode: Text.WordWrap
-        text: "Silent unless ticked. Kept audio is copied when the source codec fits MP4, "
-              + "otherwise re-encoded to AAC. Renders are H.264 MP4 (yuv420p, faststart) at the "
-              + "clip's native resolution and frame rate."
+        text: "Silent unless ticked. Kept audio is copied when the container accepts it, "
+              + "otherwise re-encoded to AAC. H.264 renders are MP4 (yuv420p, faststart); "
+              + "ProRes and DNxHR render 10-bit 4:2:2 MOV. Native resolution and frame rate."
         color: Theme.muted
         font.pixelSize: 11
     }

@@ -2,6 +2,7 @@
 // rotation to one clip, renders it and reports the result. Not part of the
 // app; build it with the stock-clipper-selftest target.
 
+#include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QTimer>
@@ -24,6 +25,20 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("nirebu"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("nirebu.local"));
     QCoreApplication::setApplicationName(QStringLiteral("stock-clipper"));
+
+    // SC_FORMAT=h264|prores|dnxhr, seeded before the backend loads settings.
+    const QString format = qEnvironmentVariable("SC_FORMAT");
+    if (!format.isEmpty()) {
+        const Paths paths = Paths::discover();
+        QJsonObject settings = readJson(paths.settingsFile());
+        settings.insert(QStringLiteral("format"), format);
+        // The file now exists, so Backend skips its first-run ./input default.
+        if (!settings.contains("root") && QFileInfo(QStringLiteral("input")).isDir()) {
+            settings.insert("root", QDir::current().filePath("input"));
+            settings.insert("outputDir", QDir::current().filePath("renders"));
+        }
+        writeJson(paths.settingsFile(), settings);
+    }
 
     Backend backend;
     const QString wanted = qEnvironmentVariable("SC_CLIP");

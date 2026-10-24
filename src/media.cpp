@@ -88,12 +88,26 @@ QString buildVideoFilter(int rotate, bool flipH, bool flipV)
     return f.join(QLatin1Char(','));
 }
 
-QString audioPlan(bool hasAudio, const QString &audioCodec, bool keepAudio)
+QString audioPlan(bool hasAudio, const QString &audioCodec, bool keepAudio,
+                  const QString &container)
 {
     if (!hasAudio || !keepAudio)
         return QStringLiteral("none");
-    static const QStringList mp4Safe{"aac", "mp3", "ac3", "eac3", "alac"};
-    return mp4Safe.contains(audioCodec.toLower()) ? QStringLiteral("copy") : QStringLiteral("aac");
+    static const QStringList safe{"aac", "mp3", "ac3", "eac3", "alac"};
+    const QString codec = audioCodec.toLower();
+    if (safe.contains(codec))
+        return QStringLiteral("copy");
+    // MOV carries PCM fine; MP4 does not (and MXF is not offered).
+    if (container == QLatin1String("mov") && codec.startsWith(QLatin1String("pcm_")))
+        return QStringLiteral("copy");
+    return QStringLiteral("aac");
+}
+
+QString outputExtension(const QString &format)
+{
+    return format == QLatin1String("prores") || format == QLatin1String("dnxhr")
+        ? QStringLiteral("mov")
+        : QStringLiteral("mp4");
 }
 
 QStringList probeArgs(const QString &input)
@@ -180,7 +194,8 @@ Meta parseProbe(const QByteArray &json, QString *error)
 
 QStringList renderArgs(const RenderSpec &spec)
 {
-    const QString audio = audioPlan(spec.hasAudio, spec.audioCodec, spec.keepAudio);
+    const QString container = outputExtension(spec.format);
+    const QString audio = audioPlan(spec.hasAudio, spec.audioCodec, spec.keepAudio, container);
 
     QStringList args{"-hide_banner", "-loglevel", "error", "-nostdin", "-y"};
     // -ss before -i: fast, but still frame-accurate while re-encoding
@@ -194,8 +209,19 @@ QStringList renderArgs(const RenderSpec &spec)
         args << "-map" << "0:a:0";
 
     args << "-vf" << buildVideoFilter(spec.rotate, spec.flipH, spec.flipV);
-    args << "-c:v" << "libx264" << "-preset" << spec.preset << "-crf" << QString::number(spec.crf);
-    args << "-pix_fmt" << "yuv420p" << "-profile:v" << "high";
+    if (spec.format == QLatin1String("prores")) {
+        // 422 HQ, 10-bit; the filter above still guarantees even dimensions.
+        args << "-c:v" << "prores_ks" << "-profile:v" << "3"
+             << "-vendor" << "apl0" << "-pix_fmt" << "yuv422p10le";
+    } else if (spec.format == QLatin1String("dnxhr")) {
+        // DNxHR sidesteps DNxHD's fixed raster/bitrate table.
+        args << "-c:v" << "dnxhd" << "-profile:v" << "dnxhr_hqx"
+             << "-pix_fmt" << "yuv422p10le";
+    } else {
+        args << "-c:v" << "libx264" << "-preset" << spec.preset
+             << "-crf" << QString::number(spec.crf)
+             << "-pix_fmt" << "yuv420p" << "-profile:v" << "high";
+    }
 
     if (audio == QLatin1String("copy")) {
         // -shortest stops a copied track running ~20ms past the video
