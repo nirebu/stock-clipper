@@ -34,7 +34,6 @@ qt_add_qml_module(stock-clipper
         qml/QueuePanel.qml
         qml/Sheet.qml
         qml/SettingsDialog.qml
-        qml/BrowseDialog.qml
         qml/Toast.qml
 )
 

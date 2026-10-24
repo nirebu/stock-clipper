@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Dialogs
 import StockClipper 1.0
 
 Window {
@@ -17,6 +18,16 @@ Window {
     property bool browseForRoot: true
     property bool queueOpen: true
     property bool loopOn: true
+
+    onBrowseOpenChanged: {
+        if (browseOpen) {
+            folderDialog.currentFolder = App.pathToUrl(
+                browseForRoot ? settingsDialog.rootText : settingsDialog.outText)
+            folderDialog.open()
+        } else {
+            folderDialog.close()
+        }
+    }
 
     Item {
         id: root
@@ -546,20 +557,24 @@ Window {
             }
             onBrowseRequested: (forRoot) => {
                 win.browseForRoot = forRoot
-                browseDialog.startPath = forRoot ? settingsDialog.rootText : settingsDialog.outText
                 win.browseOpen = true
             }
         }
 
-        BrowseDialog {
-            id: browseDialog
-            anchors.fill: parent
-            open: win.browseOpen
-            onClosed: {
+        // Native system folder picker (portal/GTK on Wayland, wherever the
+        // platform theme provides one). The settings sheet still owns the
+        // paths; this only hands back the chosen folder.
+        FolderDialog {
+            id: folderDialog
+            title: win.browseForRoot ? "Choose source folder" : "Choose output folder"
+
+            onAccepted: {
+                const path = App.pathFromUrl(selectedFolder)
+                if (!path.isEmpty())
+                    settingsDialog.setFolder(path, win.browseForRoot)
                 win.browseOpen = false
-                root.forceActiveFocus()
             }
-            onChosen: (path) => settingsDialog.setFolder(path, win.browseForRoot)
+            onRejected: win.browseOpen = false
         }
 
         Sheet {

@@ -5,6 +5,7 @@
 #include <functional>
 #include <QObject>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantMap>
 
 #include "core.h"
@@ -175,7 +176,8 @@ public:
     Q_INVOKABLE void retryJob(const QString &path);
 
     Q_INVOKABLE void saveSettings(QVariantMap values);
-    Q_INVOKABLE QVariantMap browse(const QString &path);
+    Q_INVOKABLE QUrl pathToUrl(const QString &path) const;
+    Q_INVOKABLE QString pathFromUrl(const QUrl &url) const;
     Q_INVOKABLE void revealOutputs();
     Q_INVOKABLE void revealPath(const QString &path);
 

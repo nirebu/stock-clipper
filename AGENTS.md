@@ -175,6 +175,10 @@ unrelated files are never clobbered and a re-render of our own clip can overwrit
   `(path, mtime, size, orientation)`; `Thumbnailer` dedupes in-flight work and
   `Backend::loadStrip()` tracks `m_stripWant` so a slow response for an older
   orientation cannot overwrite a newer one. Do not key the cache without orientation.
+- Folder selection uses `QtQuick.Dialogs`' `FolderDialog` (Settings → Browse…), which
+  asks the platform theme for its native picker (GTK3/portal here). There is no
+  hand-rolled folder navigator any more; don't add one back. Settings store plain
+  paths, the dialog speaks `file://` URLs, hence `Backend::pathToUrl/pathFromUrl`.
 - Clean up test renders: the selftest writes into the configured output folder
   (default `./renders`), not into the state dir.
 

@@ -52,7 +52,7 @@ int main(int argc, char *argv[])
     if (engine.rootObjects().isEmpty())
         return 1;
 
-    // SC_OPEN=settings|browse opens a dialog for screenshots.
+    // SC_OPEN=settings opens the settings sheet for screenshots.
     const QString open = qEnvironmentVariable("SC_OPEN");
     if (!open.isEmpty()) {
         QTimer::singleShot(1500, [&] {
@@ -61,8 +61,6 @@ int main(int argc, char *argv[])
                 return;
             if (open == QLatin1String("settings"))
                 root->setProperty("settingsOpen", true);
-            else if (open == QLatin1String("browse"))
-                root->setProperty("browseOpen", true);
         });
     }
 

@@ -1042,34 +1042,17 @@ void Backend::saveSettings(QVariantMap values)
     rescan();
 }
 
-QVariantMap Backend::browse(const QString &path)
+QUrl Backend::pathToUrl(const QString &path) const
 {
-    QString target = path.trimmed();
-    if (target.isEmpty())
-        target = m_settings.root;
-    QDir dir(target);
-    if (!dir.exists())
-        dir = QDir(QDir::homePath());
+    const QString trimmed = path.trimmed();
+    if (trimmed.isEmpty())
+        return {};
+    return QUrl::fromLocalFile(QFileInfo(trimmed).absoluteFilePath());
+}
 
-    QStringList dirs;
-    const QFileInfoList entries =
-        dir.entryInfoList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
-    int videos = 0;
-    for (const QFileInfo &fi : entries) {
-        if (fi.isDir()) {
-            if (!fi.fileName().startsWith(QLatin1Char('.')))
-                dirs << fi.absoluteFilePath();
-        } else if (isVideoFile(fi.fileName())) {
-            ++videos;
-        }
-    }
-
-    QVariantMap out;
-    out.insert(QStringLiteral("path"), dir.absolutePath());
-    out.insert(QStringLiteral("parent"), QFileInfo(dir.absolutePath()).absolutePath());
-    out.insert(QStringLiteral("dirs"), dirs);
-    out.insert(QStringLiteral("videos"), videos);
-    return out;
+QString Backend::pathFromUrl(const QUrl &url) const
+{
+    return url.toLocalFile();
 }
 
 void Backend::revealOutputs()
